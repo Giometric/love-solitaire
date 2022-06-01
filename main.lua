@@ -9,14 +9,16 @@ cardH = 95
 cardWHalf = cardW / 2
 cardHHalf = cardH / 2
 sideSpacing = 20
-cardSpacing = ((windowW - (sideSpacing * 2)) - (7 * cardW)) / 6
+tableauSpacingX = ((windowW - (sideSpacing * 2)) - (7 * cardW)) / 6
+tableauSpacingY = 12
 stockX = sideSpacing + cardWHalf
 stockY = sideSpacing + cardHHalf
 tableauY = 210
 cardBack = "red4"
 talonMaxCount = 3
 gameStartTime = -1
-gameStartDelay = 0.5
+gameStartDelay = 0.3
+dealDelayBetweenCards = 0.04
 debugMsg = ""
 suitNames = {
     "Clubs",
@@ -32,13 +34,18 @@ talonSpriteMoveSpeed = 6.5
 grabbedCard = nil
 grabOffset = { x = 0, y = 0 }
 
--- Broad bounding boxes for clickable areas
+-- Broad bounding boxes for clickable areas, used to narrow down number of collision checks
 stockBox = { x = sideSpacing - 10, y = stockY - cardHHalf - 10, w = cardW + 20, h = cardH + 20 }
-talonBox = { x = sideSpacing + cardW + cardSpacing - 10, y = stockY - cardHHalf - 10, w = cardW + 120, h = cardH + 20 }
+talonBox = { x = sideSpacing + cardW + tableauSpacingX - 10, y = stockY - cardHHalf - 10, w = cardW + 120, h = cardH + 20 }
 tableauBox = {} -- refreshed in love.update
 
+function isCardSpriteAtDestination(cardSprite)
+    return math.abs(cardSprite.oX - cardSprite.x) < 0.1 and
+        math.abs(cardSprite.oY - cardSprite.y) < 0.1
+end
+
 function drawCardFromStock()
-    if table.getn(stock) > 0 then
+    if #stock > 0 then
         return table.remove(stock)
     else
         return nil
@@ -63,8 +70,9 @@ function restartGame()
     for i = 1, 52 do
         cardSprites[i] = {
             state = 0, -- 0 = stock, 1 = talon, 2 = tableau, 3 = foundation
+            moveDelay = 0,
             grabbed = false,
-            moveTime = -1,
+            returning = false,
             visible = false, up = false, oX = stockX, oY = stockY,
             x = stockX, y = stockY, sX = 1, sY = 1, face = -1, -- draw params
         }
@@ -82,24 +90,25 @@ function restartGame()
     tableau = {
         {}, {}, {}, {}, {}, {}, {}
     }
-    
-    local moveTime = gameStartTime + gameStartDelay
+
+    local moveDelay = 0
     for row = 1, 7 do
         for c = 1, 7 do
             if c >= row then
                 local cardIdx = drawCardFromStock()
                 tableau[c][row] = cardIdx
 
+                local cardSprite = cardSprites[cardIdx]
                 if c == row then
-                    cardSprites[cardIdx].up = true
-                    cardSprites[cardIdx].face = -1
+                    cardSprite.up = true
+                    cardSprite.face = -1
                 else
-                    cardSprites[cardIdx].up = false
-                    cardSprites[cardIdx].face = -1
+                    cardSprite.up = false
+                    cardSprite.face = -1
                 end
-                cardSprites[cardIdx].state = 2
-                cardSprites[cardIdx].moveTime = moveTime
-                moveTime = moveTime + 0.04
+                cardSprite.state = 2
+                cardSprite.moveDelay = moveDelay
+                moveDelay = moveDelay + dealDelayBetweenCards
             end
         end
     end
@@ -144,66 +153,87 @@ end
 function love.mousepressed(x, y, button, istouch, presses)
     -- Right-clicking releases the held card without trying to place it
     if button == 2 and grabbedCard then
-        cardSprites[grabbedCard.idx].grabbed = false
+        local cardSprite = cardSprites[grabbedCard.idx]
+        cardSprite.grabbed = false
+        cardSprite.returning = true
         grabbedCard = nil
         return
     end
 
-    local currentTime = love.timer.getTime()
     debugMsg = string.format("Mouse click, x: %.0f, y: %.0f.", x, y)
     if not grabbedCard and BoundingBox.PointWithinBox(stockBox.x, stockBox.y, stockBox.w, stockBox.h, x, y) then
         -- Mouse press was on stock, draw to talon
         local cardIdx = drawCardFromStock()
         if cardIdx then
             local card = cardData[cardIdx]
+            local cardSprite = cardSprites[cardIdx]
             debugMsg = string.format("Clicked stock, drew %i of %s.", card.value, suitNames[card.suit])
             table.insert(talon, cardIdx)
-            cardSprites[cardIdx].visible = true
-            cardSprites[cardIdx].moveTime = currentTime
-            cardSprites[cardIdx].up = true
-            cardSprites[cardIdx].face = -1
-            if table.getn(talon) > talonMaxCount then
+            cardSprite.visible = true
+            cardSprite.up = true
+            cardSprite.face = -1
+            if #talon > talonMaxCount then
                 local talonBottom = table.remove(talon, 1)
+                local talonBottomSprite = cardSprites[talonBottom]
                 table.insert(stock, 1, talonBottom)
 
                 -- Move talon card back to stock
-                cardSprites[talonBottom].state = 0
-                cardSprites[talonBottom].moveTime = currentTime
-                cardSprites[talonBottom].visible = true
-                cardSprites[talonBottom].up = true
-                cardSprites[talonBottom].oX = stockX
-                cardSprites[talonBottom].oY = stockY
+                talonBottomSprite.state = 0
+                talonBottomSprite.visible = true
+                talonBottomSprite.up = true
+                talonBottomSprite.oX = stockX
+                talonBottomSprite.oY = stockY
             end
         end
     elseif not grabbedCard and BoundingBox.PointWithinBox(talonBox.x, talonBox.y, talonBox.w, talonBox.h, x, y) then
         -- Mouse press was on talon
-        local talonCount = table.getn(talon)
+        local talonCount = #talon
         if talonCount > 0 and grabbedCard == nil then
             -- Only top-most card can be grabbed, check against that
             local cardIdx = talon[talonCount]
             local topCard = cardData[cardIdx]
             local cardBox = getCardSpriteBoundingBox(cardIdx)
             if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
-                debugMsg = string.format("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
-                local cardSprite = cardSprites[cardIdx]
-                cardSprite.grabbed = true
-                grabbedCard = topCard
-                grabOffset = { x = cardSprite.x - x, y = cardSprite.y - y }
+                if button == 1 then
+                    debugMsg = string.format("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
+                    local cardSprite = cardSprites[cardIdx]
+                    cardSprite.grabbed = true
+                    grabbedCard = topCard
+                    grabOffset = { x = cardSprite.x - x, y = cardSprite.y - y }
+                elseif button == 2 then
+                    debugMsg = string.format("TODO: Auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
+                end
             end
             -- TODO: Logic for finding eligible spot for card
         end
     elseif BoundingBox.PointWithinBox(tableauBox.x, tableauBox.y, tableauBox.w, tableauBox.h, x, y) then
         -- Mouse press was on tableau
         local checkX = sideSpacing;
-        local column = -1
         for i = 1, 7 do
             if BoundingBox.PointWithinBox(checkX, tableauBox.y, cardW, tableauBox.h, x, y) then
-                column = i
-                debugMsg = string.format("Clicked tableau, column %i.", column)
-                -- TODO: Check individual cards, starting from top-most
+                debugMsg = string.format("Clicked tableau, column %i.", i)
+                local column = tableau[i]
+                for _, cardIdx in pairs(column) do
+                    local cardBox = getCardSpriteBoundingBox(cardIdx)
+                    if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
+                        local clickedCardData = cardData[cardIdx]
+                        debugMsg = string.format("Clicked tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                        if not grabbedCard then
+                            if button == 1 then
+                                debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                local cardSprite = cardSprites[cardIdx]
+                                cardSprite.grabbed = true
+                                grabbedCard = clickedCardData
+                                grabOffset = { x = cardSprite.x - x, y = cardSprite.y - y }
+                            elseif button == 2 then
+                                debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                            end
+                        end
+                    end
+                end
                 break
             end
-            checkX = checkX + cardW + cardSpacing
+            checkX = checkX + cardW + tableauSpacingX
         end
     end
 end
@@ -219,7 +249,7 @@ function love.update(dt)
 end
 
 function drawStockStatic()
-    local stockCount = table.getn(stock)
+    local stockCount = #stock
     if stockCount > 3 then stockCount = 3 end
 
     if stockCount > 0 then
@@ -240,13 +270,15 @@ end
 
 function updateCardSprites(dt)
     local currentTime = love.timer.getTime()
+    local startDelayEnd = gameStartTime + gameStartDelay
+    local timeSinceStartDelay = currentTime - startDelayEnd
+    local startDelayFinished = timeSinceStartDelay >= 0
 
     -- Hide stock cards once they've reached their destination
-    for i, cardIdx in pairs(stock) do
-        if cardSprites[cardIdx].visible and
-           cardSprites[cardIdx].x == cardSprites[cardIdx].oX and
-           cardSprites[cardIdx].y == cardSprites[cardIdx].oY then
-            cardSprites[cardIdx].visible = false
+    for _, cardIdx in pairs(stock) do
+        local cardSprite = cardSprites[cardIdx]
+        if cardSprite.visible and isCardSpriteAtDestination(cardSprite) then
+            cardSprite.visible = false
         end
     end
 
@@ -254,46 +286,52 @@ function updateCardSprites(dt)
     local talonX = stockX + cardW + 20
     local talonY = stockY
     for i, cardIdx in pairs(talon) do
-        cardSprites[cardIdx].oX = talonX
-        cardSprites[cardIdx].oY = talonY
+        local cardSprite = cardSprites[cardIdx]
+        cardSprite.oX = talonX
+        cardSprite.oY = talonY
         talonX = talonX + 30
         talonY = talonY + 1
+        -- If a returning talon card is no longer the top-most, take away its 'returning' status
+        -- so that it no longer draws over the top of all other cards
+        if cardSprite.returning and (not cardSprite.visible or i ~= #talon or isCardSpriteAtDestination(cardSprite)) then
+            cardSprite.returning = false
+        end
     end
 
     -- Update cards in tableau
     local tableauX = sideSpacing + cardWHalf
-    for c, pile in pairs(tableau) do
+    for _, pile in pairs(tableau) do
         for row, cardIdx in pairs(pile) do
-            cardSprites[cardIdx].oX = tableauX
-            cardSprites[cardIdx].oY = tableauY + (row * 12)
-            cardSprites[cardIdx].visible = currentTime >= cardSprites[cardIdx].moveTime
+            local cardSprite = cardSprites[cardIdx]
+            cardSprite.oX = tableauX
+            cardSprite.oY = tableauY + (row * tableauSpacingY)
+            cardSprite.visible = cardSprite.moveDelay <= timeSinceStartDelay
+            if cardSprite.returning and (isCardSpriteAtDestination(cardSprite) or not cardSprite.visible) then
+                cardSprite.returning = false
+            end
         end
-        tableauX = tableauX + cardW + cardSpacing
+        tableauX = tableauX + cardW + tableauSpacingX
     end
 
-    -- Update movement for any visible card sprites that aren't grabbed
-    for idx, sprite in pairs(cardSprites) do
-        -- Sprites going to the tableau should become visible once they're moving
-        if sprite.state == 2 and sprite.moveTime <= currentTime then sprite.visible = true end
-        if sprite.visible then
-            if sprite.grabbed then
-                sprite.x = love.mouse.getX() + grabOffset.x
-                sprite.y = love.mouse.getY() + grabOffset.y
-            else
-                if sprite.moveTime >= 0 and currentTime >= sprite.moveTime then
-                    if math.abs(sprite.oX - sprite.x) < 0.2 then
+    -- If game start delay is done, update movement for any visible card sprites that aren't grabbed
+    if startDelayFinished then
+        for _, sprite in pairs(cardSprites) do
+            if sprite.visible then
+                if sprite.grabbed then
+                    sprite.x = love.mouse.getX() + grabOffset.x
+                    sprite.y = love.mouse.getY() + grabOffset.y
+                else
+                    if isCardSpriteAtDestination(sprite) then
                         sprite.x = sprite.oX
-                    else
-                        sprite.x = utils.lerp(sprite.x, sprite.oX, dt * spriteMoveSpeed)
-                    end
-                    if math.abs(sprite.oY - sprite.y) < 0.2 then
                         sprite.y = sprite.oY
                     else
+                        sprite.x = utils.lerp(sprite.x, sprite.oX, dt * spriteMoveSpeed)
                         sprite.y = utils.lerp(sprite.y, sprite.oY, dt * spriteMoveSpeed)
                     end
+
                     local destFace = -1
                     if sprite.up then destFace = 1 end
-                    if math.abs(destFace - sprite.face) < 0.01 then
+                    if math.abs(destFace - sprite.face) < 0.02 then
                         sprite.face = destFace
                     else
                         sprite.face = utils.lerp(sprite.face, destFace, dt * spriteFlipSpeed)
@@ -305,7 +343,7 @@ function updateCardSprites(dt)
 end
 
 function drawCardSprites()
-    for i, cardIdx in pairs(stock) do
+    for _, cardIdx in pairs(stock) do
         local sprite = cardSprites[cardIdx]
         if sprite.visible then
             drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
@@ -315,17 +353,34 @@ function drawCardSprites()
     -- Stock draws over stock-bound cards but under all others
     drawStockStatic()
 
-    for i, cardIdx in pairs(talon) do
+    for _, cardIdx in pairs(talon) do
         local sprite = cardSprites[cardIdx]
-        if sprite.visible and not sprite.grabbed then
+        if sprite.visible and not sprite.grabbed and not sprite.returning then
             drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
         end
     end
 
-    for col, pile in pairs(tableau) do
+    for _, pile in pairs(tableau) do
         for i, cardIdx in pairs(pile) do
             local sprite = cardSprites[cardIdx]
-            if sprite.visible and not sprite.grabbed then
+            if sprite.visible and not sprite.grabbed and not sprite.returning then
+                drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
+            end
+        end
+    end
+
+    -- Draw cards returning to the talon or tableau above others
+    for _, cardIdx in pairs(talon) do
+        local sprite = cardSprites[cardIdx]
+        if sprite.returning then
+            drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
+        end
+    end
+
+    for _, pile in pairs(tableau) do
+        for _, cardIdx in pairs(pile) do
+            local sprite = cardSprites[cardIdx]
+            if sprite.returning then
                 drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
             end
         end
@@ -335,7 +390,7 @@ function drawCardSprites()
     if grabbedCard then
         local cardIdx = grabbedCard.idx
         local sprite = cardSprites[cardIdx]
-        drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
+        drawCard(cardIdx, sprite.x, sprite.y, sprite.face, true)
     end
 end
 
@@ -348,39 +403,43 @@ end
 
 function drawFoundation()
     -- Similar drawing rules to the tableau, but skip the first 3 columns
-    local x = sideSpacing + cardWHalf + ((cardW + cardSpacing) * 3)
+    local x = sideSpacing + cardWHalf + ((cardW + tableauSpacingX) * 3)
     local y = stockY
     love.graphics.setLineStyle("smooth")
     love.graphics.setLineWidth(2)
     for col, pile in pairs(foundation) do
-        local pileCount = table.getn(pile)
+        local pileCount = #pile
         if pileCount > 0 then
-            local topCardIdx = pile[table.getn(pile)]
+            local topCardIdx = pile[#pile]
             drawCard(topCardIdx, x, y, 1)
         else
             drawEmptyCardSpace(x, y)
         end
-        x = x + cardW + cardSpacing
+        x = x + cardW + tableauSpacingX
     end
 end
 
-function drawCard(idx, x, y, face)
+function drawCard(idx, x, y, face, grabbed)
+    grabbed = grabbed or false
     -- { idx=cardIdx, suit=s, value=v }
-    local card = cardData[idx]
     local faceAbs = math.abs(face)
-    local scaleX = faceAbs * 0.5
+    local cardScale = 0.5
+    if grabbed then cardScale = 0.52 end
+    local scaleX = faceAbs * cardScale
     local fade = utils.lerp(0.3, 1, faceAbs)
-    local shadowScaleX = utils.lerp(0.05, 0.51, faceAbs)
+    local shadowScaleX = utils.lerp(0.05, cardScale + 0.01, faceAbs)
 
     -- Draw shadow first
     love.graphics.setColor(0, 0, 0, 0.3)
-    cards.drawCardShadow(x + 2, y + 2, 0, shadowScaleX, 0.51)
+    local shadowDist = 2
+    if grabbed then shadowDist = 6 end
+    cards.drawCardShadow(x + shadowDist, y + shadowDist, 0, shadowScaleX, cardScale)
 
     love.graphics.setColor(fade, fade, fade, 1)
     if face > 0 then
-        cards.drawCard(idx, x, y, 0, scaleX, 0.5)
+        cards.drawCard(idx, x, y, 0, scaleX, cardScale)
     elseif face < 0 then
-        cards.drawCardBack(cardBack, x, y, 0, scaleX, 0.5)
+        cards.drawCardBack(cardBack, x, y, 0, scaleX, cardScale)
     end
     love.graphics.setColor(1, 1, 1, 1)
 end
@@ -397,7 +456,7 @@ end
 function love.draw()
     windowW, windowH = love.graphics.getDimensions()
     local totalWidth = windowW - (sideSpacing * 2)
-    cardSpacing = (totalWidth - (7 * cardW)) / 6
+    tableauSpacingX = (totalWidth - (7 * cardW)) / 6
     drawVignette()
     drawFoundation()
     drawCardSprites()
