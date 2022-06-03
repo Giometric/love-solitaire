@@ -172,6 +172,8 @@ function love.mousepressed(x, y, button, istouch, presses)
             cardSprite.visible = true
             cardSprite.up = true
             cardSprite.face = -1
+
+            -- If the talon is already at the max count, put the bottom-most talon card back at the bottom of the stock
             if #talon > talonMaxCount then
                 local talonBottom = table.remove(talon, 1)
                 local talonBottomSprite = cardSprites[talonBottom]
@@ -188,7 +190,7 @@ function love.mousepressed(x, y, button, istouch, presses)
     elseif not grabbedCard and BoundingBox.PointWithinBox(talonBox.x, talonBox.y, talonBox.w, talonBox.h, x, y) then
         -- Mouse press was on talon
         local talonCount = #talon
-        if talonCount > 0 and grabbedCard == nil then
+        if talonCount > 0 then
             -- Only top-most card can be grabbed, check against that
             local cardIdx = talon[talonCount]
             local topCard = cardData[cardIdx]
@@ -196,10 +198,7 @@ function love.mousepressed(x, y, button, istouch, presses)
             if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
                 if button == 1 then
                     debugMsg = string.format("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
-                    local cardSprite = cardSprites[cardIdx]
-                    cardSprite.grabbed = true
-                    grabbedCard = topCard
-                    grabOffset = { x = cardSprite.x - x, y = cardSprite.y - y }
+                    grabCardSprite(cardIdx)
                 elseif button == 2 then
                     debugMsg = string.format("TODO: Auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
                 end
@@ -208,25 +207,36 @@ function love.mousepressed(x, y, button, istouch, presses)
         end
     elseif BoundingBox.PointWithinBox(tableauBox.x, tableauBox.y, tableauBox.w, tableauBox.h, x, y) then
         -- Mouse press was on tableau
-        local checkX = sideSpacing;
+        local checkX = sideSpacing
         for i = 1, 7 do
             if BoundingBox.PointWithinBox(checkX, tableauBox.y, cardW, tableauBox.h, x, y) then
                 debugMsg = string.format("Clicked tableau, column %i.", i)
                 local column = tableau[i]
-                for _, cardIdx in pairs(column) do
-                    local cardBox = getCardSpriteBoundingBox(cardIdx)
-                    if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
-                        local clickedCardData = cardData[cardIdx]
-                        debugMsg = string.format("Clicked tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                        if not grabbedCard then
-                            if button == 1 then
-                                debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                                local cardSprite = cardSprites[cardIdx]
-                                cardSprite.grabbed = true
-                                grabbedCard = clickedCardData
-                                grabOffset = { x = cardSprite.x - x, y = cardSprite.y - y }
-                            elseif button == 2 then
-                                debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                -- Check for collisions starting from the last (top-most) card on this column
+                for rowIdx = #column, 1, -1 do
+                    local cardIdx = column[rowIdx]
+                    local cardSprite = cardSprites[cardIdx]
+                    if cardSprite.up then
+                        local cardBox = getCardSpriteBoundingBox(cardIdx)
+                        if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
+                            local clickedCardData = cardData[cardIdx]
+                            debugMsg = string.format("Clicked tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                            if not grabbedCard then
+                                if button == 1 then
+                                    debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                    grabCardSprite(cardIdx)
+                                elseif button == 2 then
+                                    debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                end
+                            else
+                                -- Try to place the held card
+                                if button == 1 and canPlaceCardOnTableauColumn(grabbedCard.idx, i) then
+                                    debugMsg = string.format("Placed card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
+                                    placeCardOnTableau(grabbedCard.idx, i)
+                                    cardSprite.grabbed = false
+                                    cardSprite.returning = true
+                                    grabbedCard = nil
+                                end
                             end
                         end
                     end
@@ -235,6 +245,68 @@ function love.mousepressed(x, y, button, istouch, presses)
             end
             checkX = checkX + cardW + tableauSpacingX
         end
+    end
+end
+
+function findCardInTableau(cardIdx)
+    for column = 1, 7 do
+        local column = tableau[column]
+        for row, columnCardIdx in pairs(column) do
+            if columnCardIdx == cardIdx then
+                return { column=column, row=row }
+            end
+        end
+    end
+end
+
+function areCardsOpposingSuits(a, b)
+    return
+        ((a.suit == 1 or a.suit == 4) and (b.suit == 2 or b.suit == 3)) or
+        ((a.suit == 2 or a.suit == 3) and (b.suit == 1 or b.suit == 4))
+end
+
+function canPlaceCardOnTableauColumn(placingCardIdx, columnIdx)
+    local placingCard = cardData[placingCardIdx]
+    local column = tableau[columnIdx]
+    if #column == 0 then
+        -- Only Kings can be placed in empty columns
+        return placingCard.value == 13
+    else
+        local tableauCardIdx = column[#column]
+        local tableauCard = cardData[tableauCardIdx]
+        return areCardsOpposingSuits(placingCard, tableauCard) and placingCard.value == tableauCard.value - 1
+    end
+end
+
+function grabCardSprite(cardIdx)
+    if grabbedCard and grabbedCard.idx == cardIdx then return end
+    -- Release previously-grabbed card
+    if grabbedCard then
+        local previousGrabbedSprite = cardSprites[grabbedCard.idx]
+        previousGrabbedSprite.grabbed = false
+        previousGrabbedSprite.returning = true
+    end
+
+    local cardSprite = cardSprites[cardIdx]
+    cardSprite.grabbed = true
+    cardSprite.returning = false
+    grabbedCard = cardData[cardIdx]
+    mouseX, mouseY = love.mouse.getPosition()
+    grabOffset = { x = cardSprite.x - mouseX, y = cardSprite.y - mouseY }
+end
+
+function placeCardOnTableau(cardIdx, columnIdx)
+    local cardSprite = cardSprites[cardIdx]
+    if cardSprite.state == 1 then
+        -- Card was top-most in talon
+       table.remove(talon)
+       table.insert(tableau[columnIdx], cardIdx)
+    elseif cardSprite.state == 2 then
+       -- Card was in tableau, find which column it came from, remove it from there, and then place
+       -- TODO: Place entire stack
+       local column, row = findCardInTableau(cardIdx)
+       table.remove(tableau[column])
+       table.insert(tableau[columnIdx])
     end
 end
 
