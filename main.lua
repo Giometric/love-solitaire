@@ -10,7 +10,7 @@ cardWHalf = cardW / 2
 cardHHalf = cardH / 2
 sideSpacing = 20
 tableauSpacingX = ((windowW - (sideSpacing * 2)) - (7 * cardW)) / 6
-tableauSpacingY = 12
+tableauSpacingY = 14
 stockX = sideSpacing + cardWHalf
 stockY = sideSpacing + cardHHalf
 tableauY = 210
@@ -172,6 +172,7 @@ function love.mousepressed(x, y, button, istouch, presses)
             cardSprite.visible = true
             cardSprite.up = true
             cardSprite.face = -1
+            cardSprite.state = 1
 
             -- If the talon is already at the max count, put the bottom-most talon card back at the bottom of the stock
             if #talon > talonMaxCount then
@@ -225,17 +226,23 @@ function love.mousepressed(x, y, button, istouch, presses)
                                 if button == 1 then
                                     debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
                                     grabCardSprite(cardIdx)
+                                    return
                                 elseif button == 2 then
                                     debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                    return
                                 end
                             else
                                 -- Try to place the held card
                                 if button == 1 and canPlaceCardOnTableauColumn(grabbedCard.idx, i) then
-                                    debugMsg = string.format("Placed card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
-                                    placeCardOnTableau(grabbedCard.idx, i)
-                                    cardSprite.grabbed = false
-                                    cardSprite.returning = true
-                                    grabbedCard = nil
+                                    if placeCardOnTableau(grabbedCard.idx, i) then
+                                        debugMsg = string.format("Placed card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
+                                        local grabbedSprite = cardSprites[grabbedCard.idx]
+                                        grabbedSprite.grabbed = false
+                                        grabbedSprite.returning = true
+                                        grabbedCard = nil
+                                    else
+                                        debugMsg = string.format("Failed to place card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
+                                    end
                                 end
                             end
                         end
@@ -249,14 +256,15 @@ function love.mousepressed(x, y, button, istouch, presses)
 end
 
 function findCardInTableau(cardIdx)
-    for column = 1, 7 do
-        local column = tableau[column]
-        for row, columnCardIdx in pairs(column) do
+    for columnIdx = 1, 7 do
+        local column = tableau[columnIdx]
+        for rowIdx, columnCardIdx in pairs(column) do
             if columnCardIdx == cardIdx then
-                return { column=column, row=row }
+                return columnIdx, rowIdx
             end
         end
     end
+    return -1, -1
 end
 
 function areCardsOpposingSuits(a, b)
@@ -301,13 +309,23 @@ function placeCardOnTableau(cardIdx, columnIdx)
         -- Card was top-most in talon
        table.remove(talon)
        table.insert(tableau[columnIdx], cardIdx)
+       cardSprite.state = 2
+       lastPlaced = cardSprite
+       return true
     elseif cardSprite.state == 2 then
        -- Card was in tableau, find which column it came from, remove it from there, and then place
        -- TODO: Place entire stack
-       local column, row = findCardInTableau(cardIdx)
-       table.remove(tableau[column])
-       table.insert(tableau[columnIdx])
+       local foundColumn, foundRow = findCardInTableau(cardIdx)
+       if foundColumn == -1 then
+           debugMsg = "Failed to find tableau card anywhere in the tableau!"
+       else
+           table.remove(tableau[foundColumn], foundRow) -- TODO: Remove all cards stacked onto this one
+           table.insert(tableau[columnIdx], cardIdx) -- TODO: Add all cards stacked onto this one
+           cardSprite.state = 2
+           return true
+       end
     end
+    return false
 end
 
 function love.mousereleased(x, y, button, istouch, presses)
