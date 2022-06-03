@@ -94,7 +94,7 @@ function cards.drawCard(idx, x, y, rotation, scaleX, scaleY)
     scaleX = scaleX or 1
     scaleY = scaleY or 1
     local cardQuad = cardQuads[idx]
-    qx, qy, qw, qh = cardQuad:getViewport()
+    local qx, qy, qw, qh = cardQuad:getViewport()
     
     love.graphics.draw(cardsImg, cardQuad, x, y, rotation, scaleX, scaleY, qw/2.0, qh/2.0)
 end
@@ -104,7 +104,7 @@ function cards.drawCardBack(name, x, y, rotation, scaleX, scaleY)
     scaleX = scaleX or 1
     scaleY = scaleY or 1
     local cardBackQuad = cardBackQuads[name]
-    qx, qy, qw, qh = cardBackQuad:getViewport()
+    local qx, qy, qw, qh = cardBackQuad:getViewport()
     
     love.graphics.draw(cardBacksImg, cardBackQuad, x, y, rotation, scaleX, scaleY, qw/2.0, qh/2.0)
 end

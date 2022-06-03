@@ -153,10 +153,7 @@ end
 function love.mousepressed(x, y, button, istouch, presses)
     -- Right-clicking releases the held card without trying to place it
     if button == 2 and grabbedCard then
-        local cardSprite = cardSprites[grabbedCard.idx]
-        cardSprite.grabbed = false
-        cardSprite.returning = true
-        grabbedCard = nil
+        releaseGrabbedSprite()
         return
     end
 
@@ -209,45 +206,58 @@ function love.mousepressed(x, y, button, istouch, presses)
     elseif BoundingBox.PointWithinBox(tableauBox.x, tableauBox.y, tableauBox.w, tableauBox.h, x, y) then
         -- Mouse press was on tableau
         local checkX = sideSpacing
-        for i = 1, 7 do
+        for i = 1, 7 do -- Check which column was clicked, left-to-right
             if BoundingBox.PointWithinBox(checkX, tableauBox.y, cardW, tableauBox.h, x, y) then
                 debugMsg = string.format("Clicked tableau, column %i.", i)
                 local column = tableau[i]
-                -- Check for collisions starting from the last (top-most) card on this column
-                for rowIdx = #column, 1, -1 do
-                    local cardIdx = column[rowIdx]
-                    local cardSprite = cardSprites[cardIdx]
-                    if cardSprite.up then
-                        local cardBox = getCardSpriteBoundingBox(cardIdx)
+
+                if grabbedCard then
+                    -- If we're holding a card, only check the top-most card of this column,
+                    -- or check if the column is empty if placing a King
+                    local attemptPlace = false
+                    if #column == 0 then
+                        attemptPlace = true
+                    else
+                        local clickedCardIdx = column[#column]
+                        local cardBox = getCardSpriteBoundingBox(clickedCardIdx)
                         if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
-                            local clickedCardData = cardData[cardIdx]
-                            debugMsg = string.format("Clicked tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                            if not grabbedCard then
+                            attemptPlace = true
+                        end
+                    end
+
+                    -- Try to place the held card
+                    if attemptPlace and canPlaceCardOnTableauColumn(grabbedCard.idx, i) then
+                        if placeCardOnTableau(grabbedCard.idx, i) then
+                            debugMsg = string.format("Placed card %i of %s onto tableau column %i.", grabbedCard.value, suitNames[grabbedCard.suit], i)
+                            releaseGrabbedSprite()
+                        else
+                            debugMsg = string.format("Failed to place card %i of %s onto %i.", grabbedCard.value, suitNames[grabbedCard.suit], i)
+                        end
+                    end
+                else
+                    -- Not holding a card, so check for collisions, starting from the
+                    -- last (top-most) card on this column to see if we can pick one up
+                    for rowIdx = #column, 1, -1 do
+                        local clickedCardIdx = column[rowIdx]
+                        local clickedCardSprite = cardSprites[clickedCardIdx]
+                        -- Only allow clicking cards which are face-up
+                        if clickedCardSprite.up then
+                            local cardBox = getCardSpriteBoundingBox(clickedCardIdx)
+                            if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
+                                local clickedCardData = cardData[clickedCardIdx]
                                 if button == 1 then
                                     debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                                    grabCardSprite(cardIdx)
-                                    return
+                                    grabCardSprite(clickedCardIdx)
                                 elseif button == 2 then
                                     debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                                    return
                                 end
-                            else
-                                -- Try to place the held card
-                                if button == 1 and canPlaceCardOnTableauColumn(grabbedCard.idx, i) then
-                                    if placeCardOnTableau(grabbedCard.idx, i) then
-                                        debugMsg = string.format("Placed card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
-                                        local grabbedSprite = cardSprites[grabbedCard.idx]
-                                        grabbedSprite.grabbed = false
-                                        grabbedSprite.returning = true
-                                        grabbedCard = nil
-                                    else
-                                        debugMsg = string.format("Failed to place card %i of %s onto %i of %s.", grabbedCard.value, suitNames[grabbedCard.suit], clickedCardData.value, suitNames[clickedCardData.suit])
-                                    end
-                                end
+                                -- Found a clicked card, stop here
+                                break
                             end
                         end
                     end
                 end
+                -- Found which column was clicked, break from here
                 break
             end
             checkX = checkX + cardW + tableauSpacingX
@@ -303,27 +313,50 @@ function grabCardSprite(cardIdx)
     grabOffset = { x = cardSprite.x - mouseX, y = cardSprite.y - mouseY }
 end
 
+function releaseGrabbedSprite()
+    if grabbedCard then
+        local cardSprite = cardSprites[grabbedCard.idx]
+        cardSprite.grabbed = false
+        cardSprite.returning = true
+        grabbedCard = nil
+    end
+end
+
 function placeCardOnTableau(cardIdx, columnIdx)
     local cardSprite = cardSprites[cardIdx]
     if cardSprite.state == 1 then
         -- Card was top-most in talon
-       table.remove(talon)
-       table.insert(tableau[columnIdx], cardIdx)
-       cardSprite.state = 2
-       lastPlaced = cardSprite
-       return true
+        table.remove(talon)
+        table.insert(tableau[columnIdx], cardIdx)
+        cardSprite.state = 2
+        lastPlaced = cardSprite
+        return true
     elseif cardSprite.state == 2 then
-       -- Card was in tableau, find which column it came from, remove it from there, and then place
-       -- TODO: Place entire stack
-       local foundColumn, foundRow = findCardInTableau(cardIdx)
-       if foundColumn == -1 then
-           debugMsg = "Failed to find tableau card anywhere in the tableau!"
-       else
-           table.remove(tableau[foundColumn], foundRow) -- TODO: Remove all cards stacked onto this one
-           table.insert(tableau[columnIdx], cardIdx) -- TODO: Add all cards stacked onto this one
-           cardSprite.state = 2
-           return true
-       end
+        -- Card was in tableau, find which column it came from, remove it from there, and then place
+        -- TODO: Place entire stack
+        local foundColumn, foundRow = findCardInTableau(cardIdx)
+        if foundColumn == -1 then
+            debugMsg = "Failed to find tableau card anywhere in the tableau!"
+        else
+            local stack = {}
+            local foundColumnCount = #tableau[foundColumn]
+            -- Remove cards from the top until we have the entire stack, starting from the card that was clicked
+            -- Add them one by one to the top of the clicked column
+            for i = foundRow, foundColumnCount do
+                local topCardIdx = table.remove(tableau[foundColumn], foundRow)
+                local topCardSprite = cardSprites[topCardIdx]
+                topCardSprite.returning = true
+                table.insert(tableau[columnIdx], topCardIdx)
+            end
+
+            -- Flip over the new top card, if any are left in our previous column
+            if #tableau[foundColumn] > 0 then
+                local newTopCardIdx = tableau[foundColumn][#tableau[foundColumn]]
+                local newTopCardSprite = cardSprites[newTopCardIdx]
+                newTopCardSprite.up = true
+            end
+            return true
+        end
     end
     return false
 end
