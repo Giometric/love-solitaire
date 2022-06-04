@@ -1,6 +1,7 @@
 cards = require("cards")
 utils = require("utils")
 BoundingBox = require("BoundingBox")
+Debug = require("Debug")
 
 windowW = 640
 windowH = 480
@@ -19,7 +20,6 @@ talonMaxCount = 3
 gameStartTime = -1
 gameStartDelay = 0.3
 dealDelayBetweenCards = 0.04
-debugMsg = ""
 suitNames = {
     "Clubs",
     "Diamonds",
@@ -39,6 +39,8 @@ grabOffset = { x = 0, y = 0 }
 stockBox = { x = sideSpacing - 10, y = stockY - cardHHalf - 10, w = cardW + 20, h = cardH + 20 }
 talonBox = { x = sideSpacing + cardW + tableauSpacingX - 10, y = stockY - cardHHalf - 10, w = cardW + 120, h = cardH + 20 }
 tableauBox = {} -- refreshed in love.update
+
+showDebug = false
 
 function isCardSpriteAtDestination(cardSprite)
     return math.abs(cardSprite.oX - cardSprite.x) < 0.1 and
@@ -121,7 +123,7 @@ function restartGame()
         {}, {}, {}, {}
     }
 
-    debugMsg = "Game started."
+    Debug.Log("Game started.")
 end
 
 function getCardSpriteBoundingBox(idx)
@@ -139,7 +141,7 @@ function love.load()
     love.graphics.setBackgroundColor(0.15, 0.4, 0.19)
     love.window.setMode(windowW, windowH, {resizable=true, vsync=true, highdpi=true})
     cards.loadCardGraphics()
-    vignetteImg = love.graphics.newImage("img/vignette.png")
+    vignetteImg = love.graphics.newImage("img/vignette.png", {})
 
     restartGame()
 end
@@ -147,26 +149,39 @@ end
 function love.keypressed(key)
     if key == "r" then
         restartGame()
+    elseif key == "tab" then
+        showDebug = not showDebug
     elseif key == "escape" then
         love.event.quit()
     end
 end
 
+function love.wheelmoved(x, y)
+    if showDebug and Debug.HandleWheelMoved(x, y) then
+        return
+    end
+end
+
 function love.mousepressed(x, y, button, istouch, presses)
+    -- Check for clicks on the debug window first
+    if showDebug and Debug.HandleMousePressed(x, y, button, istouch, presses) then
+        return
+    end
+
     -- Right-clicking releases the held card without trying to place it
     if button == 2 and grabbedCard then
         releaseGrabbedSprites()
         return
     end
 
-    debugMsg = string.format("Mouse click, x: %.0f, y: %.0f.", x, y)
+    Debug.Log("Mouse click, x: %.0f, y: %.0f.", x, y)
     if not grabbedCard and BoundingBox.PointWithinBox(stockBox.x, stockBox.y, stockBox.w, stockBox.h, x, y) then
         -- Mouse press was on stock, draw to talon
         local cardIdx = drawCardFromStock()
         if cardIdx then
             local card = cardData[cardIdx]
             local cardSprite = cardSprites[cardIdx]
-            debugMsg = string.format("Clicked stock, drew %i of %s.", card.value, suitNames[card.suit])
+            Debug.Log("Clicked stock, drew %i of %s.", card.value, suitNames[card.suit])
             table.insert(talon, cardIdx)
             cardSprite.visible = true
             cardSprite.up = true
@@ -197,10 +212,10 @@ function love.mousepressed(x, y, button, istouch, presses)
             local cardBox = getCardSpriteBoundingBox(cardIdx)
             if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
                 if button == 1 then
-                    debugMsg = string.format("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
+                    Debug.Log("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
                     grabCardSprite(cardIdx)
                 elseif button == 2 then
-                    debugMsg = string.format("TODO: Auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
+                    Debug.LogWarning("TODO: Auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
                 end
             end
             -- TODO: Logic for finding eligible spot for card
@@ -210,7 +225,7 @@ function love.mousepressed(x, y, button, istouch, presses)
         local checkX = sideSpacing
         for i = 1, 7 do -- Check which column was clicked, left-to-right
             if BoundingBox.PointWithinBox(checkX, tableauBox.y, cardW, tableauBox.h, x, y) then
-                debugMsg = string.format("Clicked tableau, column %i.", i)
+                Debug.Log("Clicked tableau, column %i.", i)
                 local column = tableau[i]
 
                 if grabbedCard then
@@ -231,10 +246,10 @@ function love.mousepressed(x, y, button, istouch, presses)
                     -- Try to place the held card
                     if attemptPlace and canPlaceCardOnTableauColumn(grabbedCard, i) then
                         if placeCardOnTableau(grabbedCard, i) then
-                            debugMsg = string.format("Placed card %i of %s onto tableau column %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
+                            Debug.Log("Placed card %i of %s onto tableau column %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
                             releaseGrabbedSprites()
                         else
-                            debugMsg = string.format("Failed to place card %i of %s onto %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
+                            Debug.LogWarning("Failed to place card %i of %s onto %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
                         end
                     end
                 else
@@ -249,7 +264,7 @@ function love.mousepressed(x, y, button, istouch, presses)
                             if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
                                 local clickedCardData = cardData[clickedCardIdx]
                                 if button == 1 then
-                                    debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                    Debug.Log("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
                                     -- Pick up all the cards stacked on top of the one we clicked
                                     local stackedCards = {}
                                     for stackIdx = rowIdx + 1, #column do
@@ -257,7 +272,7 @@ function love.mousepressed(x, y, button, istouch, presses)
                                     end
                                     grabCardSprite(clickedCardIdx, stackedCards)
                                 elseif button == 2 then
-                                    debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                    Debug.LogWarning("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
                                 end
                                 -- Found a clicked card, stop here
                                 break
@@ -317,11 +332,6 @@ function grabCardSprite(cardIdx, stackedCards)
     grabOffset = { x = cardSprite.x - mouseX, y = cardSprite.y - mouseY }
 
     if stackedCards then
-        local idxs = ""
-        for _, idx in pairs(stackedCards) do
-            idxs = idxs .. string.format("%i, ", idx)
-        end
-        debugMsg = idxs
         for _, stackCardIdx in pairs(stackedCards) do
             local stackCardSprite = cardSprites[stackCardIdx]
             stackCardSprite.grabbed = false
@@ -362,7 +372,7 @@ function placeCardOnTableau(cardIdx, columnIdx)
         -- TODO: Place entire stack
         local foundColumn, foundRow = findCardInTableau(cardIdx)
         if foundColumn == -1 then
-            debugMsg = "Failed to find tableau card anywhere in the tableau!"
+            Debug.LogError("Failed to find tableau card anywhere in the tableau!")
         else
             local stack = {}
             local foundColumnCount = #tableau[foundColumn]
@@ -632,10 +642,9 @@ function love.draw()
     drawFoundation()
     drawCardSprites()
 
-    love.graphics.setColor(1, 1, 1, 0.4)
-    love.graphics.print(debugMsg, 10, windowH - 40)
-
     love.graphics.setColor(1, 1, 1, 1)
     local gameTime = math.max(0, love.timer.getTime() - (gameStartTime + gameStartDelay))
     love.graphics.print(string.format("Time: %.0f", gameTime), 10, windowH - 20)
+
+    if showDebug then Debug.DrawDebug() end
 end
