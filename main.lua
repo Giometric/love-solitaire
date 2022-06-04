@@ -151,6 +151,8 @@ function love.keypressed(key)
         restartGame()
     elseif key == "tab" then
         showDebug = not showDebug
+    elseif key == "c" then
+        Debug.ClearLogMessages()
     elseif key == "escape" then
         love.event.quit()
     end
@@ -174,7 +176,6 @@ function love.mousepressed(x, y, button, istouch, presses)
         return
     end
 
-    Debug.Log("Mouse click, x: %.0f, y: %.0f.", x, y)
     if not grabbedCard and BoundingBox.PointWithinBox(stockBox.x, stockBox.y, stockBox.w, stockBox.h, x, y) then
         -- Mouse press was on stock, draw to talon
         local cardIdx = drawCardFromStock()

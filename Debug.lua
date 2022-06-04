@@ -32,6 +32,18 @@ local function logInternal(category, msg, ...)
     scroll = math.max(#messages - LineCount, 0)
 end
 
+local function mouseInWindow()
+    local mouseX, mouseY = love.mouse.getPosition()
+    local _, windowH = love.graphics.getDimensions()
+    local totalHeight = (LineCount * lineHeight) + ((LineCount - 1) * lineSpacing) + (padding * 2)
+    local windowY = windowH - totalHeight
+    if mouseX >= 0 and mouseX <= windowH and
+        mouseY >= windowY and mouseY <= windowY+windowH then
+            return true
+    end
+    return false
+end
+
 -- Public methods
 function Debug.Log(msg, ...)
     logInternal(1, msg, ...)
@@ -52,16 +64,11 @@ end
 function Debug.Scroll(lines)
     lines = lines or 1
     local newScroll = scroll + lines
-    scroll = math.max(0, math.min(maxMessages, newScroll))
+    scroll = math.max(0, math.min(#messages - LineCount, newScroll))
 end
 
 function Debug.HandleWheelMoved(x, y)
-    local mouseX, mouseY = love.mouse.getPosition()
-    local _, windowH = love.graphics.getDimensions()
-    local totalHeight = (LineCount * lineHeight) + ((LineCount - 1) * lineSpacing) + (padding * 2)
-    local windowY = windowH - totalHeight
-    if mouseX >= 0 and mouseX <= windowH and
-        mouseY >= windowY and mouseY <= windowY+windowH then
+    if mouseInWindow() then
         Debug.Scroll(-y)
         return true
     end
@@ -69,14 +76,7 @@ function Debug.HandleWheelMoved(x, y)
 end
 
 function Debug.HandleMousePressed(x, y, button, istouch, presses)
-    local _, windowH = love.graphics.getDimensions()
-    local totalHeight = (LineCount * lineHeight) + ((LineCount - 1) * lineSpacing) + (padding * 2)
-    local windowY = windowH - totalHeight
-    if x >= 0 and x <= windowH and
-        y >= windowY and y <= windowY+windowH then
-            return true
-    end
-    return false
+    return mouseInWindow()
 end
 
 function Debug.DrawDebug()
