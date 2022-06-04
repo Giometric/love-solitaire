@@ -32,6 +32,7 @@ talonSpriteFlipSpeed = 8
 spriteMoveSpeed = 6
 talonSpriteMoveSpeed = 6.5
 grabbedCard = nil
+grabbedStack = {}
 grabOffset = { x = 0, y = 0 }
 
 -- Broad bounding boxes for clickable areas, used to narrow down number of collision checks
@@ -72,6 +73,7 @@ function restartGame()
             state = 0, -- 0 = stock, 1 = talon, 2 = tableau, 3 = foundation
             moveDelay = 0,
             grabbed = false,
+            grabbedInStack = false,
             returning = false,
             visible = false, up = false, oX = stockX, oY = stockY,
             x = stockX, y = stockY, sX = 1, sY = 1, face = -1, -- draw params
@@ -153,7 +155,7 @@ end
 function love.mousepressed(x, y, button, istouch, presses)
     -- Right-clicking releases the held card without trying to place it
     if button == 2 and grabbedCard then
-        releaseGrabbedSprite()
+        releaseGrabbedSprites()
         return
     end
 
@@ -214,6 +216,7 @@ function love.mousepressed(x, y, button, istouch, presses)
                 if grabbedCard then
                     -- If we're holding a card, only check the top-most card of this column,
                     -- or check if the column is empty if placing a King
+                    local grabbedCardData = cardData[grabbedCard]
                     local attemptPlace = false
                     if #column == 0 then
                         attemptPlace = true
@@ -226,12 +229,12 @@ function love.mousepressed(x, y, button, istouch, presses)
                     end
 
                     -- Try to place the held card
-                    if attemptPlace and canPlaceCardOnTableauColumn(grabbedCard.idx, i) then
-                        if placeCardOnTableau(grabbedCard.idx, i) then
-                            debugMsg = string.format("Placed card %i of %s onto tableau column %i.", grabbedCard.value, suitNames[grabbedCard.suit], i)
-                            releaseGrabbedSprite()
+                    if attemptPlace and canPlaceCardOnTableauColumn(grabbedCard, i) then
+                        if placeCardOnTableau(grabbedCard, i) then
+                            debugMsg = string.format("Placed card %i of %s onto tableau column %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
+                            releaseGrabbedSprites()
                         else
-                            debugMsg = string.format("Failed to place card %i of %s onto %i.", grabbedCard.value, suitNames[grabbedCard.suit], i)
+                            debugMsg = string.format("Failed to place card %i of %s onto %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
                         end
                     end
                 else
@@ -247,7 +250,12 @@ function love.mousepressed(x, y, button, istouch, presses)
                                 local clickedCardData = cardData[clickedCardIdx]
                                 if button == 1 then
                                     debugMsg = string.format("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
-                                    grabCardSprite(clickedCardIdx)
+                                    -- Pick up all the cards stacked on top of the one we clicked
+                                    local stackedCards = {}
+                                    for stackIdx = rowIdx + 1, #column do
+                                        table.insert(stackedCards, column[stackIdx])
+                                    end
+                                    grabCardSprite(clickedCardIdx, stackedCards)
                                 elseif button == 2 then
                                     debugMsg = string.format("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
                                 end
@@ -296,30 +304,48 @@ function canPlaceCardOnTableauColumn(placingCardIdx, columnIdx)
     end
 end
 
-function grabCardSprite(cardIdx)
-    if grabbedCard and grabbedCard.idx == cardIdx then return end
-    -- Release previously-grabbed card
-    if grabbedCard then
-        local previousGrabbedSprite = cardSprites[grabbedCard.idx]
-        previousGrabbedSprite.grabbed = false
-        previousGrabbedSprite.returning = true
-    end
+function grabCardSprite(cardIdx, stackedCards)
+    -- Release previously-grabbed cards
+    releaseGrabbedSprites()
 
     local cardSprite = cardSprites[cardIdx]
     cardSprite.grabbed = true
+    cardSprite.grabbedInStack = false
     cardSprite.returning = false
-    grabbedCard = cardData[cardIdx]
+    grabbedCard = cardIdx
     mouseX, mouseY = love.mouse.getPosition()
     grabOffset = { x = cardSprite.x - mouseX, y = cardSprite.y - mouseY }
+
+    if stackedCards then
+        local idxs = ""
+        for _, idx in pairs(stackedCards) do
+            idxs = idxs .. string.format("%i, ", idx)
+        end
+        debugMsg = idxs
+        for _, stackCardIdx in pairs(stackedCards) do
+            local stackCardSprite = cardSprites[stackCardIdx]
+            stackCardSprite.grabbed = false
+            stackCardSprite.grabbedInStack = true
+            stackCardSprite.returning = false
+            table.insert(grabbedStack, stackCardIdx)
+        end
+    end
 end
 
-function releaseGrabbedSprite()
+function releaseGrabbedSprites()
     if grabbedCard then
-        local cardSprite = cardSprites[grabbedCard.idx]
+        local cardSprite = cardSprites[grabbedCard]
         cardSprite.grabbed = false
         cardSprite.returning = true
         grabbedCard = nil
     end
+
+    for _, cardIdx in pairs(grabbedStack) do
+        local cardSprite = cardSprites[cardIdx]
+        cardSprite.grabbedInStack = false
+        cardSprite.returning = true
+    end
+    grabbedStack = {}
 end
 
 function placeCardOnTableau(cardIdx, columnIdx)
@@ -410,14 +436,16 @@ function updateCardSprites(dt)
     local talonY = stockY
     for i, cardIdx in pairs(talon) do
         local cardSprite = cardSprites[cardIdx]
-        cardSprite.oX = talonX
-        cardSprite.oY = talonY
-        talonX = talonX + 30
-        talonY = talonY + 1
-        -- If a returning talon card is no longer the top-most, take away its 'returning' status
-        -- so that it no longer draws over the top of all other cards
-        if cardSprite.returning and (not cardSprite.visible or i ~= #talon or isCardSpriteAtDestination(cardSprite)) then
-            cardSprite.returning = false
+        if not cardSprite.grabbed and not cardSprite.grabbedInStack then
+            cardSprite.oX = talonX
+            cardSprite.oY = talonY
+            talonX = talonX + 30
+            talonY = talonY + 1
+            -- If a returning talon card is no longer the top-most, take away its 'returning' status
+            -- so that it no longer draws over the top of all other cards
+            if cardSprite.returning and (not cardSprite.visible or i ~= #talon or isCardSpriteAtDestination(cardSprite)) then
+                cardSprite.returning = false
+            end
         end
     end
 
@@ -426,24 +454,23 @@ function updateCardSprites(dt)
     for _, pile in pairs(tableau) do
         for row, cardIdx in pairs(pile) do
             local cardSprite = cardSprites[cardIdx]
-            cardSprite.oX = tableauX
-            cardSprite.oY = tableauY + (row * tableauSpacingY)
-            cardSprite.visible = cardSprite.moveDelay <= timeSinceStartDelay
-            if cardSprite.returning and (isCardSpriteAtDestination(cardSprite) or not cardSprite.visible) then
-                cardSprite.returning = false
+            if not cardSprite.grabbed and not cardSprite.grabbedInStack then
+                cardSprite.oX = tableauX
+                cardSprite.oY = tableauY + (row * tableauSpacingY)
+                cardSprite.visible = cardSprite.moveDelay <= timeSinceStartDelay
+                if cardSprite.returning and (isCardSpriteAtDestination(cardSprite) or not cardSprite.visible) then
+                    cardSprite.returning = false
+                end
             end
         end
         tableauX = tableauX + cardW + tableauSpacingX
     end
 
-    -- If game start delay is done, update movement for any visible card sprites that aren't grabbed
+    -- If game start delay is done, update movement for any visible card sprites
     if startDelayFinished then
         for _, sprite in pairs(cardSprites) do
             if sprite.visible then
-                if sprite.grabbed then
-                    sprite.x = love.mouse.getX() + grabOffset.x
-                    sprite.y = love.mouse.getY() + grabOffset.y
-                else
+                if not sprite.grabbed and not sprite.grabbedInStack then
                     if isCardSpriteAtDestination(sprite) then
                         sprite.x = sprite.oX
                         sprite.y = sprite.oY
@@ -463,6 +490,23 @@ function updateCardSprites(dt)
             end
         end
     end
+
+    -- Update positions of grabbed cards
+    if grabbedCard then
+        local mouseX, mouseY = love.mouse.getPosition()
+        local grabPosX = mouseX + grabOffset.x
+        local grabPosY = mouseY + grabOffset.y
+        local grabbedSprite = cardSprites[grabbedCard]
+        grabbedSprite.x = grabPosX
+        grabbedSprite.y = grabPosY
+        
+        for i, cardIdx in pairs(grabbedStack) do
+            grabPosY = grabPosY + tableauSpacingY
+            local stackSprite = cardSprites[cardIdx]
+            stackSprite.x = grabPosX
+            stackSprite.y = grabPosY
+        end
+    end
 end
 
 function drawCardSprites()
@@ -478,7 +522,7 @@ function drawCardSprites()
 
     for _, cardIdx in pairs(talon) do
         local sprite = cardSprites[cardIdx]
-        if sprite.visible and not sprite.grabbed and not sprite.returning then
+        if sprite.visible and not sprite.grabbed and not sprite.grabbedInStack and not sprite.returning then
             drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
         end
     end
@@ -486,7 +530,7 @@ function drawCardSprites()
     for _, pile in pairs(tableau) do
         for i, cardIdx in pairs(pile) do
             local sprite = cardSprites[cardIdx]
-            if sprite.visible and not sprite.grabbed and not sprite.returning then
+            if sprite.visible and not sprite.grabbed and not sprite.grabbedInStack and not sprite.returning then
                 drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
             end
         end
@@ -509,11 +553,15 @@ function drawCardSprites()
         end
     end
 
-    -- Draw grabbed card last, over everything else
+    -- Draw grabbed card last, over everything else, then any cards grabbed as part of the stack
     if grabbedCard then
-        local cardIdx = grabbedCard.idx
-        local sprite = cardSprites[cardIdx]
-        drawCard(cardIdx, sprite.x, sprite.y, sprite.face, true)
+        local sprite = cardSprites[grabbedCard]
+        drawCard(grabbedCard, sprite.x, sprite.y, sprite.face, true)
+        
+        for i, cardIdx in pairs(grabbedStack) do
+            local stackSprite = cardSprites[cardIdx]
+            drawCard(cardIdx, stackSprite.x, stackSprite.y, stackSprite.face, true)
+        end
     end
 end
 
