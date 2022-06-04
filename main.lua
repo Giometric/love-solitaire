@@ -19,6 +19,8 @@ cardBack = "red4"
 talonMaxCount = 3
 gameStartTime = -1
 gameStartDelay = 0.3
+gameTime = 0
+gameComplete = false
 dealDelayBetweenCards = 0.04
 suitNames = {
     "Clubs",
@@ -39,6 +41,9 @@ grabOffset = { x = 0, y = 0 }
 stockBox = { x = sideSpacing - 10, y = stockY - cardHHalf - 10, w = cardW + 20, h = cardH + 20 }
 talonBox = { x = sideSpacing + cardW + tableauSpacingX - 10, y = stockY - cardHHalf - 10, w = cardW + 120, h = cardH + 20 }
 tableauBox = {} -- refreshed in love.update
+foundationSlotBoxes = { -- refreshed in love.update
+    {}, {}, {}, {}
+}
 
 showDebug = false
 
@@ -57,6 +62,8 @@ end
 
 function restartGame()
     gameStartTime = love.timer.getTime()
+    gametime = 0
+    gameComplete = false
     -- Set up card data
     -- Suits are: 1 = clubs, 2 = diamonds, 3 = hearts, 4 = spades
     cardData = {}
@@ -159,15 +166,14 @@ function love.keypressed(key)
 end
 
 function love.wheelmoved(x, y)
-    if showDebug and Debug.HandleWheelMoved(x, y) then
-        return
+    if showDebug then
+        if Debug.HandleWheelMoved(x, y) then return end
     end
 end
 
 function love.mousepressed(x, y, button, istouch, presses)
-    -- Check for clicks on the debug window first
-    if showDebug and Debug.HandleMousePressed(x, y, button, istouch, presses) then
-        return
+    if showDebug then
+        Debug.HandleMousePressed(x, y, button, istouch, presses)
     end
 
     -- Right-clicking releases the held card without trying to place it
@@ -176,32 +182,48 @@ function love.mousepressed(x, y, button, istouch, presses)
         return
     end
 
+    -- If holding a card (that's not a stack), check if any of the foundation slots were clicked
+    if button == 1 and grabbedCard and #grabbedStack == 0 then
+        for i = 1, #foundationSlotBoxes do
+            local box = foundationSlotBoxes[i]
+            if BoundingBox.PointWithinBox(box.x, box.y, box.w, box.h, x, y) then
+                if canPlaceCardOnFoundationSlot(grabbedCard, i) then
+                    placeCardOnFoundationSlot(grabbedCard, i)
+                    releaseGrabbedSprites()
+                end
+                -- Found a clicked slot, stop here
+                return
+            end
+        end
+    end
+
     if not grabbedCard and BoundingBox.PointWithinBox(stockBox.x, stockBox.y, stockBox.w, stockBox.h, x, y) then
         -- Mouse press was on stock, draw to talon
-        local cardIdx = drawCardFromStock()
-        if cardIdx then
-            local card = cardData[cardIdx]
-            local cardSprite = cardSprites[cardIdx]
+        local drawnCardIdx = drawCardFromStock()
+        if drawnCardIdx then
+            local card = cardData[drawnCardIdx]
+            local cardSprite = cardSprites[drawnCardIdx]
             Debug.Log("Clicked stock, drew %i of %s.", card.value, suitNames[card.suit])
-            table.insert(talon, cardIdx)
+            table.insert(talon, drawnCardIdx)
             cardSprite.visible = true
             cardSprite.up = true
             cardSprite.face = -1
             cardSprite.state = 1
+        end
 
-            -- If the talon is already at the max count, put the bottom-most talon card back at the bottom of the stock
-            if #talon > talonMaxCount then
-                local talonBottom = table.remove(talon, 1)
-                local talonBottomSprite = cardSprites[talonBottom]
-                table.insert(stock, 1, talonBottom)
+        -- If the talon is already at the max count, or we're out of stock cards,
+        -- put the bottom-most talon card back at the bottom of the stock
+        if #talon > talonMaxCount or (not drawnCardIdx and #talon > 0) then
+            local talonBottom = table.remove(talon, 1)
+            local talonBottomSprite = cardSprites[talonBottom]
+            table.insert(stock, 1, talonBottom)
 
-                -- Move talon card back to stock
-                talonBottomSprite.state = 0
-                talonBottomSprite.visible = true
-                talonBottomSprite.up = true
-                talonBottomSprite.oX = stockX
-                talonBottomSprite.oY = stockY
-            end
+            -- Move talon card back to stock
+            talonBottomSprite.state = 0
+            talonBottomSprite.visible = true
+            talonBottomSprite.up = true
+            talonBottomSprite.oX = stockX
+            talonBottomSprite.oY = stockY
         end
     elseif not grabbedCard and BoundingBox.PointWithinBox(talonBox.x, talonBox.y, talonBox.w, talonBox.h, x, y) then
         -- Mouse press was on talon
@@ -216,10 +238,10 @@ function love.mousepressed(x, y, button, istouch, presses)
                     Debug.Log("Grabbed talon top card, %i of %s.", topCard.value, suitNames[topCard.suit])
                     grabCardSprite(cardIdx)
                 elseif button == 2 then
-                    Debug.LogWarning("TODO: Auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
+                    Debug.LogWarning("Attempting to auto-place card %i of %s.", topCard.value, suitNames[topCard.suit])
+                    tryAutoPlaceOnFoundation(cardIdx)
                 end
             end
-            -- TODO: Logic for finding eligible spot for card
         end
     elseif BoundingBox.PointWithinBox(tableauBox.x, tableauBox.y, tableauBox.w, tableauBox.h, x, y) then
         -- Mouse press was on tableau
@@ -254,17 +276,23 @@ function love.mousepressed(x, y, button, istouch, presses)
                         end
                     end
                 else
-                    -- Not holding a card, so check for collisions, starting from the
+                    -- Not holding a card. If right-clicking, check if the top-most card can be auto-placed
+                    -- onto the foundation. Otherwise, check for collisions, starting from the
                     -- last (top-most) card on this column to see if we can pick one up
-                    for rowIdx = #column, 1, -1 do
-                        local clickedCardIdx = column[rowIdx]
-                        local clickedCardSprite = cardSprites[clickedCardIdx]
-                        -- Only allow clicking cards which are face-up
-                        if clickedCardSprite.up then
-                            local cardBox = getCardSpriteBoundingBox(clickedCardIdx)
-                            if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
-                                local clickedCardData = cardData[clickedCardIdx]
-                                if button == 1 then
+                    if button == 2 and #column > 0 then
+                        local topCardIdx = column[#column]
+                        local topCardData = cardData[topCardIdx]
+                        Debug.LogWarning("Attempting to auto-place tableau card %i of %s.", topCardData.value, suitNames[topCardData.suit])
+                        tryAutoPlaceOnFoundation(topCardIdx)
+                    else
+                        for rowIdx = #column, 1, -1 do
+                            local clickedCardIdx = column[rowIdx]
+                            local clickedCardSprite = cardSprites[clickedCardIdx]
+                            -- Only allow clicking cards which are face-up
+                            if clickedCardSprite.up then
+                                local cardBox = getCardSpriteBoundingBox(clickedCardIdx)
+                                if BoundingBox.PointWithinBox(cardBox.x, cardBox.y, cardBox.w, cardBox.h, x, y) then
+                                    local clickedCardData = cardData[clickedCardIdx]
                                     Debug.Log("Grabbed tableau card, %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
                                     -- Pick up all the cards stacked on top of the one we clicked
                                     local stackedCards = {}
@@ -272,11 +300,9 @@ function love.mousepressed(x, y, button, istouch, presses)
                                         table.insert(stackedCards, column[stackIdx])
                                     end
                                     grabCardSprite(clickedCardIdx, stackedCards)
-                                elseif button == 2 then
-                                    Debug.LogWarning("TODO: Auto-place tableau card %i of %s.", clickedCardData.value, suitNames[clickedCardData.suit])
+                                    -- Found a clicked card, stop here
+                                    break
                                 end
-                                -- Found a clicked card, stop here
-                                break
                             end
                         end
                     end
@@ -317,6 +343,22 @@ function canPlaceCardOnTableauColumn(placingCardIdx, columnIdx)
         local tableauCardIdx = column[#column]
         local tableauCard = cardData[tableauCardIdx]
         return areCardsOpposingSuits(placingCard, tableauCard) and placingCard.value == tableauCard.value - 1
+    end
+end
+
+function canPlaceCardOnFoundationSlot(placingCardIdx, slotIdx)
+    local placingCard = cardData[placingCardIdx]
+    local pile = foundation[slotIdx]
+
+    if #pile == 0 then
+        -- Only Ace (any suit) can be placed in empty foundation slots
+        return placingCard.value == 1
+    else
+        local topCardIdx = pile[#pile]
+        local topCardSuit = cardData[topCardIdx].suit
+        local topCardValue = cardData[topCardIdx].value
+        -- Only cards of the same suit and the next value up can be placed
+        return placingCard.suit == topCardSuit and placingCard.value == topCardValue + 1
     end
 end
 
@@ -366,11 +408,10 @@ function placeCardOnTableau(cardIdx, columnIdx)
         table.remove(talon)
         table.insert(tableau[columnIdx], cardIdx)
         cardSprite.state = 2
-        lastPlaced = cardSprite
+        cardSprite.returning = true
         return true
     elseif cardSprite.state == 2 then
         -- Card was in tableau, find which column it came from, remove it from there, and then place
-        -- TODO: Place entire stack
         local foundColumn, foundRow = findCardInTableau(cardIdx)
         if foundColumn == -1 then
             Debug.LogError("Failed to find tableau card anywhere in the tableau!")
@@ -398,13 +439,80 @@ function placeCardOnTableau(cardIdx, columnIdx)
     return false
 end
 
+function placeCardOnFoundationSlot(cardIdx, slotIdx)
+    local cardSprite = cardSprites[cardIdx]
+    local placedData = cardData[cardIdx]
+    if cardSprite.state == 1 then
+        -- Card was top-most in talon
+        table.remove(talon)
+        table.insert(foundation[slotIdx], cardIdx)
+        cardSprite.state = 3
+        Debug.Log("Placed %i of %s onto foundation slot %i", placedData.value, suitNames[placedData.suit], slotIdx)
+        return true
+    elseif cardSprite.state == 2 then
+        -- Card was in tableau, find which column it came from, remove it from there, and then place
+        local foundColumn, foundRow = findCardInTableau(cardIdx)
+        if foundColumn == -1 then
+            Debug.LogError("Failed to find tableau card anywhere in the tableau!")
+        else
+            -- TODO: Support adding a stack?
+            local placedCardIdx = table.remove(tableau[foundColumn], foundRow)
+            local placedCardSprite = cardSprites[placedCardIdx]
+            placedCardSprite.state = 3
+            table.insert(foundation[slotIdx], placedCardIdx)
+
+            -- Flip over the new top card, if any are left in the tableau column
+            if #tableau[foundColumn] > 0 then
+                local newTopCardIdx = tableau[foundColumn][#tableau[foundColumn]]
+                local newTopCardSprite = cardSprites[newTopCardIdx]
+                newTopCardSprite.up = true
+            end
+            Debug.Log("Placed %i of %s onto foundation slot %i", placedData.value, suitNames[placedData.suit], slotIdx)
+            return true
+        end
+    end
+    return false
+end
+
+function tryAutoPlaceOnFoundation(cardIdx)
+    for i = 1, #foundation do
+        if canPlaceCardOnFoundationSlot(cardIdx, i) then
+            placeCardOnFoundationSlot(cardIdx, i)
+            return true
+        end
+    end
+    return false
+end
+
 function love.mousereleased(x, y, button, istouch, presses)
     -- TODO: Logic for dropping a card
 end
 
 function love.update(dt)
     -- Recalculate every update in case window was resized
-    tableauBox = { x = 0, y = tableauY - cardHHalf - 10, w = windowW, h = windowH - (tableauY - cardHHalf)}
+    tableauBox = { x = 0, y = tableauY - cardHHalf - 10, w = windowW, h = windowH - (tableauY - cardHHalf) }
+
+    local foundationX = sideSpacing + ((cardW + tableauSpacingX) * 3)
+    local foundationY = stockY - cardHHalf
+    for i = 0, 3 do
+        foundationSlotBoxes[i + 1] = { x = foundationX, y = foundationY, w = cardW, h = cardH }
+        foundationX = foundationX + cardW + tableauSpacingX
+    end
+
+    -- Check if we've finished the game by counting up the cards in the foundation
+    gameComplete = true
+    for _, pile in pairs(foundation) do
+        if #pile < 13 then
+            gameComplete = false
+            break
+        end
+    end
+
+    if gameComplete then
+        -- Do game completed stuff
+    else
+        gameTime = math.max(0, love.timer.getTime() - (gameStartTime + gameStartDelay))
+    end
     updateCardSprites(dt)
 end
 
@@ -440,6 +548,28 @@ function updateCardSprites(dt)
         if cardSprite.visible and isCardSpriteAtDestination(cardSprite) then
             cardSprite.visible = false
         end
+    end
+
+    -- Move foundation cards into place, keeping only the top 3 visible
+    local foundationX = sideSpacing + cardWHalf + ((cardW + tableauSpacingX) * 3)
+    local foundationY = stockY
+    for _, pile in pairs(foundation) do
+        local pileCount = #pile
+        local minDrawPile = math.max(pileCount - 2, 1)
+        if pileCount > 0 then
+            local pileX = foundationX
+            local pileY = foundationY
+            for i = pileCount, 1, -1 do
+                local cardIdx = pile[i]
+                local cardSprite = cardSprites[cardIdx]
+                cardSprite.visible = i >= minDrawPile
+                if cardSprite.visible then
+                    cardSprite.oX = pileX
+                    cardSprite.oY = pileY
+                end
+            end
+        end
+        foundationX = foundationX + cardW + tableauSpacingX
     end
 
     -- Update cards in talon
@@ -547,6 +677,15 @@ function drawCardSprites()
         end
     end
 
+    for _, pile in pairs(foundation) do
+        for i, cardIdx in pairs(pile) do
+            local sprite = cardSprites[cardIdx]
+            if sprite.visible then
+                drawCard(cardIdx, sprite.x, sprite.y, sprite.face)
+            end
+        end
+    end
+
     -- Draw cards returning to the talon or tableau above others
     for _, cardIdx in pairs(talon) do
         local sprite = cardSprites[cardIdx]
@@ -583,27 +722,19 @@ function drawEmptyCardSpace(x, y)
     love.graphics.rectangle("line", x - cardWHalf, y - cardHHalf, cardW, cardH, 4, 4, 8)
 end
 
-function drawFoundation()
-    -- Similar drawing rules to the tableau, but skip the first 3 columns
+function drawFoundationStatic()
+    -- Similar positioning rules to the tableau, but skip the first 3 columns
     local x = sideSpacing + cardWHalf + ((cardW + tableauSpacingX) * 3)
     local y = stockY
-    love.graphics.setLineStyle("smooth")
-    love.graphics.setLineWidth(2)
-    for col, pile in pairs(foundation) do
-        local pileCount = #pile
-        if pileCount > 0 then
-            local topCardIdx = pile[#pile]
-            drawCard(topCardIdx, x, y, 1)
-        else
-            drawEmptyCardSpace(x, y)
-        end
+    for _, _ in pairs(foundation) do
+        -- Always draw the empty card outline
+        drawEmptyCardSpace(x, y)
         x = x + cardW + tableauSpacingX
     end
 end
 
 function drawCard(idx, x, y, face, grabbed)
     grabbed = grabbed or false
-    -- { idx=cardIdx, suit=s, value=v }
     local faceAbs = math.abs(face)
     local cardScale = 0.5
     if grabbed then cardScale = 0.52 end
@@ -640,12 +771,14 @@ function love.draw()
     local totalWidth = windowW - (sideSpacing * 2)
     tableauSpacingX = (totalWidth - (7 * cardW)) / 6
     drawVignette()
-    drawFoundation()
+    drawFoundationStatic()
     drawCardSprites()
 
     love.graphics.setColor(1, 1, 1, 1)
-    local gameTime = math.max(0, love.timer.getTime() - (gameStartTime + gameStartDelay))
     love.graphics.print(string.format("Time: %.0f", gameTime), 10, windowH - 20)
+    if gameComplete then
+        love.graphics.print(string.format("You win!!!"), 10, windowH - 40)
+    end
 
     if showDebug then Debug.DrawDebug() end
 end
