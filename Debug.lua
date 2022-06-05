@@ -3,7 +3,7 @@ local Debug = {}
 -- Config
 LineCount = 16
 
-local maxMessages = 255
+local maxMessages = 100
 local lineHeight = 13
 local lineSpacing = 2
 local padding = 3

@@ -20,6 +20,7 @@ talonMaxCount = 3
 gameStartTime = -1
 gameStartDelay = 0.3
 gameTime = 0
+dealStarted = false
 gameComplete = false
 dealDelayBetweenCards = 0.04
 suitNames = {
@@ -63,6 +64,7 @@ end
 function restartGame()
     gameStartTime = love.timer.getTime()
     gametime = 0
+    dealStarted = false
     gameComplete = false
     -- Set up card data
     -- Suits are: 1 = clubs, 2 = diamonds, 3 = hearts, 4 = spades
@@ -150,6 +152,12 @@ function love.load()
     cards.loadCardGraphics()
     vignetteImg = love.graphics.newImage("img/vignette.png", {})
 
+    a_cardPlace1 = love.audio.newSource("sfx/cardPlace1.ogg", "static")
+    a_cardPlace1.setVolume(a_cardPlace1, 0.4)
+    a_cardPlace2 = love.audio.newSource("sfx/cardPlace2.ogg", "static")
+    a_cardPlace2.setVolume(a_cardPlace2, 0.5)
+    a_cardPlace3 = love.audio.newSource("sfx/cardPlace3.ogg", "static")
+    a_cardPlace3.setVolume(a_cardPlace3, 0.5)
     restartGame()
 end
 
@@ -190,6 +198,9 @@ function love.mousepressed(x, y, button, istouch, presses)
                 if canPlaceCardOnFoundationSlot(grabbedCard, i) then
                     placeCardOnFoundationSlot(grabbedCard, i)
                     releaseGrabbedSprites()
+                    love.audio.stop(a_cardPlace2)
+                    -- a_cardPlace2.setPitch(a_cardPlace2, love.math.random(0.98, 1.01))
+                    love.audio.play(a_cardPlace2)
                 end
                 -- Found a clicked slot, stop here
                 return
@@ -209,6 +220,9 @@ function love.mousepressed(x, y, button, istouch, presses)
             cardSprite.up = true
             cardSprite.face = -1
             cardSprite.state = 1
+            love.audio.stop(a_cardPlace3)
+            -- a_cardPlace3.setPitch(a_cardPlace3, love.math.random(0.98, 1.01))
+            love.audio.play(a_cardPlace3)
         end
 
         -- If the talon is already at the max count, or we're out of stock cards,
@@ -270,6 +284,9 @@ function love.mousepressed(x, y, button, istouch, presses)
                     if attemptPlace and canPlaceCardOnTableauColumn(grabbedCard, i) then
                         if placeCardOnTableau(grabbedCard, i) then
                             Debug.Log("Placed card %i of %s onto tableau column %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
+                            love.audio.stop(a_cardPlace2)
+                            -- a_cardPlace2.setPitch(a_cardPlace2, love.math.random(0.98, 1.01))
+                            love.audio.play(a_cardPlace2)
                             releaseGrabbedSprites()
                         else
                             Debug.LogWarning("Failed to place card %i of %s onto %i.", grabbedCardData.value, suitNames[grabbedCardData.suit], i)
@@ -416,7 +433,6 @@ function placeCardOnTableau(cardIdx, columnIdx)
         if foundColumn == -1 then
             Debug.LogError("Failed to find tableau card anywhere in the tableau!")
         else
-            local stack = {}
             local foundColumnCount = #tableau[foundColumn]
             -- Remove cards from the top until we have the entire stack, starting from the card that was clicked
             -- Add them one by one to the top of the clicked column
@@ -478,6 +494,9 @@ function tryAutoPlaceOnFoundation(cardIdx)
     for i = 1, #foundation do
         if canPlaceCardOnFoundationSlot(cardIdx, i) then
             placeCardOnFoundationSlot(cardIdx, i)
+            love.audio.stop(a_cardPlace2)
+            -- a_cardPlace2.setPitch(a_cardPlace2, love.math.random(0.98, 1.01))
+            love.audio.play(a_cardPlace2)
             return true
         end
     end
@@ -511,7 +530,12 @@ function love.update(dt)
     if gameComplete then
         -- Do game completed stuff
     else
-        gameTime = math.max(0, love.timer.getTime() - (gameStartTime + gameStartDelay))
+        local timeUntilStart = love.timer.getTime() - (gameStartTime + gameStartDelay)
+        gameTime = math.max(0, timeUntilStart)
+        if not dealStarted and timeUntilStart >= 0 then
+            dealStarted = true
+            love.audio.play(a_cardPlace1)
+        end
     end
     updateCardSprites(dt)
 end
@@ -592,13 +616,18 @@ function updateCardSprites(dt)
 
     -- Update cards in tableau
     local tableauX = sideSpacing + cardWHalf
-    for _, pile in pairs(tableau) do
+    for i, pile in pairs(tableau) do
         for row, cardIdx in pairs(pile) do
             local cardSprite = cardSprites[cardIdx]
             if not cardSprite.grabbed and not cardSprite.grabbedInStack then
                 cardSprite.oX = tableauX
                 cardSprite.oY = tableauY + (row * tableauSpacingY)
-                cardSprite.visible = cardSprite.moveDelay <= timeSinceStartDelay
+                if not cardSprite.visible then
+                    local newVisible = cardSprite.moveDelay <= timeSinceStartDelay
+                    if newVisible then
+                        cardSprite.visible = true
+                    end
+                end
                 if cardSprite.returning and (isCardSpriteAtDestination(cardSprite) or not cardSprite.visible) then
                     cardSprite.returning = false
                 end
